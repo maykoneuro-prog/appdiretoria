@@ -217,46 +217,103 @@ export default function App() {
     setNextSyncSeconds(3600);
     try {
       if (isTvUrlMode && !force) {
-        const tvRes = await fetch('/api/tv-public-data');
-        const tvData = await tvRes.json();
-        if (tvRes.ok && tvData.ok && Array.isArray(tvData.Row) && tvData.Row.length > 0) {
-          setRows(tvData.Row);
-          setTotalScannedInSql(tvData.totalRows || tvData.Row.length);
-          setLastSyncTime(
-            new Date().toLocaleTimeString('pt-BR', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-          );
-          setLastSyncSource('Modo TV Público (Indicadores Agregados — Sem Dados Sensíveis)');
-          setIsAutoSyncing(false);
-          return;
+        try {
+          const tvRes = await fetch('/api/tv-public-data');
+          const contentType = tvRes.headers.get('content-type') || '';
+          if (tvRes.ok && contentType.includes('application/json')) {
+            const tvData = await tvRes.json();
+            if (tvData?.ok && Array.isArray(tvData.Row) && tvData.Row.length > 0) {
+              setRows(tvData.Row);
+              setTotalScannedInSql(tvData.totalRows || tvData.Row.length);
+              setLastSyncTime(
+                new Date().toLocaleTimeString('pt-BR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              );
+              setLastSyncSource('Modo TV Público (Indicadores Agregados — Sem Dados Sensíveis)');
+              return;
+            }
+          }
+        } catch {
+          // Segue para snapshot estático de TV (Vercel)
+        }
+
+        try {
+          const snapTvRes = await fetch('/data/tv_public_snapshot.json');
+          if (snapTvRes.ok) {
+            const snapTvData = await snapTvRes.json();
+            if (Array.isArray(snapTvData?.Row) && snapTvData.Row.length > 0) {
+              setRows(snapTvData.Row);
+              setTotalScannedInSql(snapTvData.totalRows || snapTvData.Row.length);
+              setLastSyncTime(
+                new Date().toLocaleTimeString('pt-BR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              );
+              setLastSyncSource('Modo TV Público (Base Oficial 2027 Sincronizada)');
+              return;
+            }
+          }
+        } catch {
+          // Segue para tentativa padrão
         }
       }
 
-      const res = await fetch('/api/totvs/consulta', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...queryParams,
-          periodo: targetPeriodo,
-          forceRefresh: force,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.ok && Array.isArray(data.Row) && data.Row.length > 0) {
-        setRows(data.Row);
-        setTotalScannedInSql(data.totalScanned || data.Row.length);
-        setLastSyncTime(
-          new Date().toLocaleTimeString('pt-BR', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-        );
-        setLastSyncSource(
-          `API TOTVS RM Ao Vivo (${data.Row.length} reg. em ${targetPeriodo} de ${data.totalScanned || data.Row.length} lidos)`
-        );
-        setCurrentPage(1);
+      let loadedFromApi = false;
+      try {
+        const res = await fetch('/api/totvs/consulta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...queryParams,
+            periodo: targetPeriodo,
+            forceRefresh: force,
+          }),
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data?.ok && Array.isArray(data.Row) && data.Row.length > 0) {
+            setRows(data.Row);
+            setTotalScannedInSql(data.totalScanned || data.Row.length);
+            setLastSyncTime(
+              new Date().toLocaleTimeString('pt-BR', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            );
+            setLastSyncSource(
+              `API TOTVS RM Ao Vivo (${data.Row.length} reg. em ${targetPeriodo} de ${data.totalScanned || data.Row.length} lidos)`
+            );
+            setCurrentPage(1);
+            loadedFromApi = true;
+          }
+        }
+      } catch {
+        // Segue para snapshot estático (/data/totvs_2027_snapshot.json) em ambientes serverless como Vercel
+      }
+
+      if (!loadedFromApi) {
+        const snapRes = await fetch('/data/totvs_2027_snapshot.json');
+        if (snapRes.ok) {
+          const snapData = await snapRes.json();
+          if (Array.isArray(snapData?.Row) && snapData.Row.length > 0) {
+            setRows(snapData.Row);
+            setTotalScannedInSql(snapData.totalScanned || snapData.Row.length);
+            setLastSyncTime(
+              new Date().toLocaleTimeString('pt-BR', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            );
+            setLastSyncSource(
+              `Base TOTVS RM 2027 (${snapData.Row.length} registros sincronizados)`
+            );
+            setCurrentPage(1);
+          }
+        }
       }
     } catch {
       // Mantém base local caso haja falha de rede

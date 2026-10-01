@@ -127,7 +127,18 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
             ? 'approved'
             : (data.status as 'pending' | 'approved' | 'rejected') || 'pending';
           const fsRole = isMaster ? 'admin' : (data.role as 'viewer' | 'admin') || 'viewer';
-          if (serverRecord && fsStatus !== serverRecord.status && fsStatus === 'approved') {
+          if (!serverRecord) {
+            serverRecord = {
+              uid: cleanUid,
+              email: cleanEmail,
+              displayName: cleanName,
+              photoURL: cleanPhoto,
+              status: fsStatus,
+              role: fsRole,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+          } else if (fsStatus !== serverRecord.status && fsStatus === 'approved') {
             serverRecord = { ...serverRecord, status: 'approved', role: fsRole };
           }
         }

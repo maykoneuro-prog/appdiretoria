@@ -89,6 +89,74 @@
         }
       },
       "required": ["uid", "email", "createdAt"]
+    },
+    "TeamBirthdayDoc": {
+      "title": "TeamBirthdayDoc",
+      "description": "Stores a team birthday celebrant entry for the Mural de Aniversariantes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the birthday entry.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name of the team member.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "day": {
+          "type": "integer",
+          "description": "Day of birth (1..31)."
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month of birth (1..12)."
+        },
+        "unitOrSector": {
+          "type": "string",
+          "description": "School unit or department.",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "description": "Congratulatory message.",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "photoDataUrl": {
+          "type": "string",
+          "description": "Compressed square portrait data URL.",
+          "minLength": 0,
+          "maxLength": 350000
+        },
+        "avatarGradient": {
+          "type": "string",
+          "description": "Fallback gradient class.",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when updated."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "day",
+        "month",
+        "unitOrSector",
+        "message",
+        "photoDataUrl",
+        "avatarGradient",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -103,6 +171,12 @@
         "$ref": "#/entities/AdminRecord"
       },
       "description": "Stores trusted administrator UIDs for role verification."
+    },
+    "/teamBirthdays/{memberId}": {
+      "schema": {
+        "$ref": "#/entities/TeamBirthdayDoc"
+      },
+      "description": "Stores team birthday mural entries synced across Vercel and TV mode."
     }
   }
 }

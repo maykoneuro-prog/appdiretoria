@@ -30,6 +30,17 @@ import {
   Pause,
   ShieldCheck,
 } from 'lucide-react';
+import {
+  collection,
+  doc,
+  setDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { db, auth } from '../firebase';
 import { TotvsStudentRow } from '../types/totvs';
 import { EmailReportsCenterModal } from './EmailReportsCenterModal';
 import {
@@ -226,7 +237,32 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
     return { enabled: true, intervalSeconds: 25 };
   });
 
+  const syncMemberToFirestore = async (member: BirthdayMember) => {
+    if (!auth.currentUser?.emailVerified) return;
+    const safeId = String(member.id || `bday-${Date.now()}`)
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 128);
+    try {
+      await setDoc(doc(db, 'teamBirthdays', safeId), {
+        id: safeId,
+        name: String(member.name || 'Colaborador').slice(0, 120),
+        day: Math.max(1, Math.min(31, Math.round(Number(member.day) || 1))),
+        month: Math.max(1, Math.min(12, Math.round(Number(member.month) || 1))),
+        unitOrSector: String(member.unitOrSector || '').slice(0, 120),
+        message: String(member.message || '').slice(0, 300),
+        photoDataUrl: String(member.photoDataUrl || '').slice(0, 350000),
+        avatarGradient: String(member.avatarGradient || '').slice(0, 80),
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      // Ignora se offline
+    }
+  };
+
   const handleUpdateBirthdayMembers = (next: BirthdayMember[]) => {
+    const prevIds = new Set(birthdayMembers.map((m) => m.id));
+    const nextIds = new Set(next.map((m) => m.id));
+
     setBirthdayMembers(next);
     try {
       localStorage.setItem(BIRTHDAYS_STORAGE_KEY, JSON.stringify(next));
@@ -238,6 +274,19 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ members: next, carouselSettings: tvCarouselSettings }),
     }).catch(() => {});
+
+    // Sincroniza adições/edições e exclusões com o Cloud Firestore (para funcionar no Vercel)
+    for (const m of next) {
+      syncMemberToFirestore(m);
+    }
+    if (auth.currentUser?.emailVerified) {
+      for (const oldId of prevIds) {
+        if (!nextIds.has(oldId)) {
+          const safeOldId = String(oldId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+          deleteDoc(doc(db, 'teamBirthdays', safeOldId)).catch(() => {});
+        }
+      }
+    }
   };
 
   const handleUpdateTvCarouselSettings = (next: TvCarouselSettings) => {
@@ -313,33 +362,99 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
       })
       .catch(() => {});
 
-    fetch('/api/team-birthdays')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data?.ok) {
-          if (Array.isArray(data.members)) {
-            setBirthdayMembers(data.members);
-            try {
-              localStorage.setItem(BIRTHDAYS_STORAGE_KEY, JSON.stringify(data.members));
-            } catch {
-              // ignore
-            }
+    const applyLoadedBirthdays = (data: {
+      members?: BirthdayMember[] | null;
+      carouselSettings?: TvCarouselSettings | null;
+    }) => {
+      if (Array.isArray(data?.members) && data.members.length > 0) {
+        setBirthdayMembers((prev) => {
+          const byId = new Map<string, BirthdayMember>();
+          for (const item of data.members!) byId.set(item.id, item);
+          for (const item of prev) {
+            if (!byId.has(item.id)) byId.set(item.id, item);
           }
-          if (data.carouselSettings && typeof data.carouselSettings === 'object') {
-            const nextSettings: TvCarouselSettings = {
-              enabled: Boolean(data.carouselSettings.enabled ?? true),
-              intervalSeconds: Number(data.carouselSettings.intervalSeconds) || 25,
-            };
-            setTvCarouselSettings(nextSettings);
-            try {
-              localStorage.setItem(TV_CAROUSEL_STORAGE_KEY, JSON.stringify(nextSettings));
-            } catch {
-              // ignore
-            }
+          const merged = Array.from(byId.values());
+          try {
+            localStorage.setItem(BIRTHDAYS_STORAGE_KEY, JSON.stringify(merged));
+          } catch {
+            // ignore
           }
+          return merged;
+        });
+      }
+      if (data?.carouselSettings && typeof data.carouselSettings === 'object') {
+        const nextSettings: TvCarouselSettings = {
+          enabled: Boolean(data.carouselSettings.enabled ?? true),
+          intervalSeconds: Number(data.carouselSettings.intervalSeconds) || 25,
+        };
+        setTvCarouselSettings(nextSettings);
+        try {
+          localStorage.setItem(TV_CAROUSEL_STORAGE_KEY, JSON.stringify(nextSettings));
+        } catch {
+          // ignore
         }
+      }
+    };
+
+    // 1. Carrega do snapshot estático em public/data (garante os 17 aniversariantes no Vercel)
+    fetch('/data/team_birthdays_2027.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) applyLoadedBirthdays(data);
       })
       .catch(() => {});
+
+    // 2. Carrega do endpoint local se disponível
+    fetch('/api/team-birthdays')
+      .then((r) => {
+        const ct = r.headers.get('content-type') || '';
+        return r.ok && ct.includes('application/json') ? r.json() : null;
+      })
+      .then((data) => {
+        if (data?.ok) applyLoadedBirthdays(data);
+      })
+      .catch(() => {});
+
+    // 3. Escuta em tempo real no Cloud Firestore (/teamBirthdays) para manter Vercel e Modo TV sincronizados
+    const q = query(collection(db, 'teamBirthdays'), where('month', '>=', 1));
+    const unsubBirthdays = onSnapshot(
+      q,
+      (snap) => {
+        if (!snap.empty) {
+          const fsMembers: BirthdayMember[] = [];
+          snap.forEach((docSnap) => {
+            const d = docSnap.data();
+            fsMembers.push({
+              id: String(d.id || docSnap.id),
+              name: String(d.name || 'Colaborador'),
+              day: Number(d.day) || 1,
+              month: Number(d.month) || 1,
+              unitOrSector: String(d.unitOrSector || ''),
+              message: String(d.message || ''),
+              photoDataUrl: d.photoDataUrl ? String(d.photoDataUrl) : undefined,
+              avatarGradient: d.avatarGradient ? String(d.avatarGradient) : undefined,
+            });
+          });
+          setBirthdayMembers((prev) => {
+            const byId = new Map<string, BirthdayMember>();
+            for (const item of prev) byId.set(item.id, item);
+            for (const item of fsMembers) byId.set(item.id, item);
+            const merged = Array.from(byId.values());
+            try {
+              localStorage.setItem(BIRTHDAYS_STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+              // ignore
+            }
+            return merged;
+          });
+        }
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubBirthdays();
+    };
   }, []);
 
   // Carrossel Automático no Modo TV: alterna entre Painel de Matrículas ('arena') e Mural de Aniversariantes ('aniversariantes')

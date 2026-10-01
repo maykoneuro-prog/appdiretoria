@@ -764,12 +764,20 @@ async function startServer() {
     }
   });
 
-  // Endpoints para o Mural de Aniversariantes da Equipe (independente do SQL, salvo em disco)
+  // Endpoints para o Mural de Aniversariantes da Equipe (independente do SQL, salvo em disco e em public/data para Vercel)
+  const PUBLIC_DATA_DIR = path.join(process.cwd(), 'public', 'data');
+  const PUBLIC_BIRTHDAYS_FILE = path.join(PUBLIC_DATA_DIR, 'team_birthdays_2027.json');
+
   app.get('/api/team-birthdays', (_req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     try {
-      if (fs.existsSync(TEAM_BIRTHDAYS_CACHE_FILE)) {
-        const raw = fs.readFileSync(TEAM_BIRTHDAYS_CACHE_FILE, 'utf8');
+      const sourceFile = fs.existsSync(TEAM_BIRTHDAYS_CACHE_FILE)
+        ? TEAM_BIRTHDAYS_CACHE_FILE
+        : fs.existsSync(PUBLIC_BIRTHDAYS_FILE)
+        ? PUBLIC_BIRTHDAYS_FILE
+        : null;
+      if (sourceFile) {
+        const raw = fs.readFileSync(sourceFile, 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
           return res.json({
@@ -792,6 +800,9 @@ async function startServer() {
       if (!fs.existsSync(CACHE_DIR)) {
         fs.mkdirSync(CACHE_DIR, { recursive: true });
       }
+      if (!fs.existsSync(PUBLIC_DATA_DIR)) {
+        fs.mkdirSync(PUBLIC_DATA_DIR, { recursive: true });
+      }
       let existing: Record<string, unknown> = {};
       if (fs.existsSync(TEAM_BIRTHDAYS_CACHE_FILE)) {
         try {
@@ -806,7 +817,9 @@ async function startServer() {
         ...(carouselSettings && typeof carouselSettings === 'object' ? { carouselSettings } : {}),
         updatedAt: new Date().toISOString(),
       };
-      fs.writeFileSync(TEAM_BIRTHDAYS_CACHE_FILE, JSON.stringify(nextPayload, null, 2), 'utf8');
+      const serialized = JSON.stringify(nextPayload, null, 2);
+      fs.writeFileSync(TEAM_BIRTHDAYS_CACHE_FILE, serialized, 'utf8');
+      fs.writeFileSync(PUBLIC_BIRTHDAYS_FILE, serialized, 'utf8');
       return res.json({ ok: true });
     } catch (err) {
       return res.status(500).json({

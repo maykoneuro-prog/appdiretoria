@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        function isExtensionOrMetaMaskError(msg, stack, filename) {
+          var combined = String(msg || '') + ' ' + String(stack || '') + ' ' + String(filename || '');
+          return (
+            combined.indexOf('MetaMask') !== -1 ||
+            combined.indexOf('ethereum') !== -1 ||
+            combined.indexOf('chrome-extension://') !== -1 ||
+            combined.indexOf('moz-extension://') !== -1 ||
+            combined.indexOf('inpage.js') !== -1
+          );
+        }
+        window.addEventListener(
+          'error',
+          function (event) {
+            if (
+              isExtensionOrMetaMaskError(
+                event.message,
+                event.error && event.error.stack,
+                event.filename
+              )
+            ) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              return false;
+            }
+          },
+          true
+        );
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event.reason;
+            var msg = reason && (reason.message || String(reason));
+            var stack = reason && reason.stack;
+            if (isExtensionOrMetaMaskError(msg, stack, '')) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              return false;
+            }
+          },
+          true
+        );
+      })();
+    </script>
+    <title>SESI TOTVS RM — Gestor de Consulta SQL (SE42018_2)</title>
+    <meta name="description" content="Aplicação para leitura, filtragem por período 2027 e manipulação de dados da consulta SQL SE42018_2 Produc via API TOTVS RM." />
+    <meta property="og:title" content="SESI TOTVS RM — Gestor de Consulta SQL (SE42018_2)" />
+    <meta property="og:description" content="Aplicação para leitura, filtragem por período 2027 e manipulação de dados da consulta SQL SE42018_2 Produc via API TOTVS RM." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-blue-600 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

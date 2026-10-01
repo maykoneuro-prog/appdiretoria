@@ -1,0 +1,6 @@
+{
+  "name": "SESI TOTVS RM — Gestor de Consulta SQL (SE42018_2)",
+  "description": "Aplicação para leitura, filtragem por período 2027 e manipulação de dados da consulta SQL SE42018_2 Produc via API TOTVS RM.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

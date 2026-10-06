@@ -25,7 +25,7 @@ service cloud.firestore {
 
     function isBootstrappedAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'maykon.euro@hotmail.com' ||
+        request.auth.token.email == 'maykon.euro@gmail.com' ||
         request.auth.token.email == 'paroquiabomsamaritano.iecb@gmail.com'
       );
     }
@@ -33,6 +33,14 @@ service cloud.firestore {
     function isAdmin() {
       return isBootstrappedAdmin() || (
         isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isApprovedUser() {
+      return isAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/accessRequests/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/accessRequests/$(request.auth.uid)).data.status == 'approved'
       );
     }
 
@@ -73,6 +81,126 @@ service cloud.firestore {
         data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
         data.createdAt is timestamp;
+    }
+
+    function isValidTeamBirthdayDoc(data) {
+      return data.keys().hasAll([
+          'id',
+          'name',
+          'day',
+          'month',
+          'unitOrSector',
+          'message',
+          'photoDataUrl',
+          'avatarGradient',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'name',
+          'day',
+          'month',
+          'unitOrSector',
+          'message',
+          'photoDataUrl',
+          'avatarGradient',
+          'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.day is int && data.day >= 1 && data.day <= 31 &&
+        data.month is int && data.month >= 1 && data.month <= 12 &&
+        data.unitOrSector is string && data.unitOrSector.size() >= 0 && data.unitOrSector.size() <= 120 &&
+        data.message is string && data.message.size() >= 0 && data.message.size() <= 300 &&
+        data.photoDataUrl is string && data.photoDataUrl.size() >= 0 && data.photoDataUrl.size() <= 350000 &&
+        data.avatarGradient is string && data.avatarGradient.size() >= 0 && data.avatarGradient.size() <= 80 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTeamScheduleDoc(data) {
+      return data.keys().hasAll([
+          'id',
+          'memberId',
+          'memberName',
+          'day',
+          'endDay',
+          'month',
+          'shift',
+          'locationCategory',
+          'locationName',
+          'activity',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'memberId',
+          'memberName',
+          'day',
+          'endDay',
+          'month',
+          'shift',
+          'locationCategory',
+          'locationName',
+          'activity',
+          'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.memberId is string && data.memberId.size() >= 1 && data.memberId.size() <= 128 &&
+        data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 120 &&
+        data.day is int && data.day >= 1 && data.day <= 31 &&
+        data.endDay is int && data.endDay >= 1 && data.endDay <= 31 &&
+        data.month is int && data.month >= 1 && data.month <= 12 &&
+        data.shift is string && data.shift.size() >= 1 && data.shift.size() <= 60 &&
+        data.locationCategory is string && data.locationCategory.size() >= 1 && data.locationCategory.size() <= 40 &&
+        data.locationName is string && data.locationName.size() >= 1 && data.locationName.size() <= 140 &&
+        data.activity is string && data.activity.size() >= 0 && data.activity.size() <= 300 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTeamEventDoc(data) {
+      return data.keys().hasAll([
+          'id',
+          'title',
+          'day',
+          'endDay',
+          'month',
+          'timeRange',
+          'location',
+          'status',
+          'description',
+          'coverPhotoDataUrl',
+          'extraPhotoDataUrl1',
+          'extraPhotoDataUrl2',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'title',
+          'day',
+          'endDay',
+          'month',
+          'timeRange',
+          'location',
+          'status',
+          'description',
+          'coverPhotoDataUrl',
+          'extraPhotoDataUrl1',
+          'extraPhotoDataUrl2',
+          'updatedAt'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+        data.day is int && data.day >= 1 && data.day <= 31 &&
+        data.endDay is int && data.endDay >= 1 && data.endDay <= 31 &&
+        data.month is int && data.month >= 1 && data.month <= 12 &&
+        data.timeRange is string && data.timeRange.size() >= 0 && data.timeRange.size() <= 80 &&
+        data.location is string && data.location.size() >= 1 && data.location.size() <= 140 &&
+        data.status in ['upcoming', 'today', 'past'] &&
+        data.description is string && data.description.size() >= 0 && data.description.size() <= 400 &&
+        data.coverPhotoDataUrl is string && data.coverPhotoDataUrl.size() >= 0 && data.coverPhotoDataUrl.size() <= 350000 &&
+        data.extraPhotoDataUrl1 is string && data.extraPhotoDataUrl1.size() >= 0 && data.extraPhotoDataUrl1.size() <= 350000 &&
+        data.extraPhotoDataUrl2 is string && data.extraPhotoDataUrl2.size() >= 0 && data.extraPhotoDataUrl2.size() <= 350000 &&
+        data.updatedAt is timestamp;
     }
 
     match /accessRequests/{userId} {
@@ -134,6 +262,92 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['email']) &&
         isAdmin();
       allow delete: if isSignedIn() && isValidId(userId) && isAdmin();
+    }
+
+    match /teamBirthdays/{memberId} {
+      allow get: if isValidId(memberId) && resource.data.month >= 1 && resource.data.month <= 12;
+      allow list: if resource.data.month >= 1 && resource.data.month <= 12;
+      allow create: if isSignedIn() &&
+        isValidId(memberId) &&
+        isValidTeamBirthdayDoc(incoming()) &&
+        incoming().id == memberId &&
+        incoming().updatedAt == request.time &&
+        isApprovedUser();
+      allow update: if isSignedIn() &&
+        isValidId(memberId) &&
+        isValidTeamBirthdayDoc(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name',
+          'day',
+          'month',
+          'unitOrSector',
+          'message',
+          'photoDataUrl',
+          'avatarGradient',
+          'updatedAt'
+        ]) &&
+        isApprovedUser();
+      allow delete: if isSignedIn() && isValidId(memberId) && isApprovedUser();
+    }
+
+    match /teamSchedules/{scheduleId} {
+      allow get: if isValidId(scheduleId) && resource.data.month >= 1 && resource.data.month <= 12;
+      allow list: if resource.data.month >= 1 && resource.data.month <= 12;
+      allow create: if isSignedIn() &&
+        isValidId(scheduleId) &&
+        isValidTeamScheduleDoc(incoming()) &&
+        incoming().id == scheduleId &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(scheduleId) &&
+        isValidTeamScheduleDoc(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'memberId',
+          'memberName',
+          'day',
+          'endDay',
+          'month',
+          'shift',
+          'locationCategory',
+          'locationName',
+          'activity',
+          'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(scheduleId);
+    }
+
+    match /teamEvents/{eventId} {
+      allow get: if isValidId(eventId) && resource.data.month >= 1 && resource.data.month <= 12;
+      allow list: if resource.data.month >= 1 && resource.data.month <= 12;
+      allow create: if isSignedIn() &&
+        isValidId(eventId) &&
+        isValidTeamEventDoc(incoming()) &&
+        incoming().id == eventId &&
+        incoming().updatedAt == request.time;
+      allow update: if isSignedIn() &&
+        isValidId(eventId) &&
+        isValidTeamEventDoc(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'title',
+          'day',
+          'endDay',
+          'month',
+          'timeRange',
+          'location',
+          'status',
+          'description',
+          'coverPhotoDataUrl',
+          'extraPhotoDataUrl1',
+          'extraPhotoDataUrl2',
+          'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(eventId);
     }
   }
 }

@@ -78,10 +78,25 @@ export default function App() {
     authError,
     signingIn,
     handleGoogleLogin,
+    handleEmailDirectLogin,
     handleLogout,
     handleAdminDecision,
     syncUserAccessState,
   } = useAccessControlAuth(tvBypassAuth);
+
+  const isAuthenticated = Boolean(accessRecord?.status === 'approved');
+  const currentUserEmail = firebaseUser?.email || accessRecord?.email || '';
+
+  const handleOpenLoginScreen = useCallback(() => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('tv');
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore
+    }
+    setTvBypassAuth(false);
+  }, []);
 
   const pendingApprovalsCount = useMemo(
     () => allRecords.filter((r) => r.status === 'pending').length,
@@ -91,7 +106,7 @@ export default function App() {
   // Aba ativa: 'dashboard' (Gestão à Vista Gamer 2027) ou 'grid' (Manipulador SQL)
   const [activeTab, setActiveTab] = useState<'dashboard' | 'grid'>('dashboard');
   const [dashboardViewRequest, setDashboardViewRequest] = useState<{
-    view: 'arena' | 'planilha' | 'ambos' | 'aniversariantes';
+    view: 'arena' | 'planilha' | 'ambos' | 'aniversariantes' | 'agenda_eventos';
     ts: number;
   } | null>(null);
   const [unitGoals, setUnitGoals] = useState<UnitGoal2027[]>(() => {
@@ -794,7 +809,7 @@ export default function App() {
     );
   }
 
-  if (!tvBypassAuth && (!firebaseUser || accessRecord?.status !== 'approved')) {
+  if (!tvBypassAuth && !isAuthenticated) {
     return (
       <AuthLoginAndPendingScreen
         firebaseUser={firebaseUser}
@@ -802,6 +817,7 @@ export default function App() {
         signingIn={signingIn}
         authError={authError}
         onGoogleLogin={handleGoogleLogin}
+        onEmailDirectLogin={handleEmailDirectLogin}
         onLogout={handleLogout}
         onRefreshStatus={() => {
           if (firebaseUser) syncUserAccessState(firebaseUser);
@@ -818,8 +834,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F2F7FC] text-slate-900">
-      {/* Top Bar Contract: 3 Zonas (Oculto no Modo TV Público ?tv=1 para não expor Lista SQL nem dados sensíveis) */}
-      {!tvBypassAuth && (
+      {/* Top Bar Contract: 3 Zonas */}
       <header className="sticky top-0 z-30 flex items-center justify-between px-6 py-3.5 border-b border-sky-200 bg-[#009FE3] text-white shadow-xs">
         {/* Zona 1: Single text element wordmark */}
         <a
@@ -865,29 +880,47 @@ export default function App() {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('grid')}
+            onClick={() => {
+              setActiveTab('dashboard');
+              setDashboardViewRequest({ view: 'agenda_eventos', ts: Date.now() });
+            }}
             className={`hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap ${
-              activeTab === 'grid'
-                ? 'text-white font-extrabold underline decoration-2 decoration-amber-300'
-                : ''
+              activeTab === 'dashboard' && dashboardViewRequest?.view === 'agenda_eventos'
+                ? 'text-emerald-200 font-extrabold underline decoration-2 decoration-emerald-300'
+                : 'text-emerald-100'
             }`}
           >
-            Lista de Alunos SQL ({rows.length})
+            Agenda Equipe & Eventos
           </button>
-          <button
-            type="button"
-            onClick={() => setConnectionModal({ open: true, mode: 'api' })}
-            className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-          >
-            Conexão TOTVS RM
-          </button>
-          <button
-            type="button"
-            onClick={handleDownloadCsv}
-            className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
-          >
-            Baixar Planilha Excel
-          </button>
+          {isAuthenticated && (
+            <>
+              <button
+                type="button"
+                onClick={() => setActiveTab('grid')}
+                className={`hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap ${
+                  activeTab === 'grid'
+                    ? 'text-white font-extrabold underline decoration-2 decoration-amber-300'
+                    : ''
+                }`}
+              >
+                Lista de Alunos SQL ({rows.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setConnectionModal({ open: true, mode: 'api' })}
+                className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
+              >
+                Conexão TOTVS RM
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadCsv}
+                className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap"
+              >
+                Baixar Planilha Excel
+              </button>
+            </>
+          )}
           {isAdmin && (
             <button
               type="button"
@@ -897,34 +930,55 @@ export default function App() {
                   ? 'text-amber-300 font-extrabold underline decoration-2 decoration-amber-300'
                   : 'text-sky-100'
               }`}
-              title="Gerenciar e aprovar solicitações de acesso ao painel (Administrador: maykon.euro@hotmail.com)"
+              title="Gerenciar e aprovar solicitações de acesso ao painel (Administrador: maykon.euro@gmail.com)"
             >
               Aprovar Acessos{pendingApprovalsCount > 0 ? ` (${pendingApprovalsCount})` : ''}
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap text-sky-100"
-            title={`Conectado como ${firebaseUser?.email || ''}. Clique para sair.`}
-          >
-            Sair
-          </button>
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="hover:text-white hover:underline underline-offset-4 transition-colors whitespace-nowrap text-sky-100"
+              title={`Conectado como ${currentUserEmail}. Clique para sair.`}
+            >
+              Sair ({currentUserEmail.split('@')[0]})
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleOpenLoginScreen}
+              className="text-amber-300 font-extrabold hover:text-white underline decoration-2 decoration-amber-300 underline-offset-4 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              Fazer Login (Google / Admin)
+            </button>
+          )}
         </nav>
 
         {/* Zona 3: 1-2 primary actions */}
         <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() =>
-              setActiveTab(activeTab === 'dashboard' ? 'grid' : 'dashboard')
-            }
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-xl border-2 border-b-4 border-sky-200 bg-white text-[#009FE3] hover:bg-sky-50 transition-colors whitespace-nowrap"
-          >
-            {activeTab === 'dashboard'
-              ? 'Ver Alunos na Tabela (57 Colunas)'
-              : 'Voltar ao Mural Escolar'}
-          </button>
+          {!isAuthenticated ? (
+            <button
+              type="button"
+              onClick={handleOpenLoginScreen}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-extrabold rounded-xl border-2 border-b-4 border-amber-500 bg-amber-300 text-amber-950 hover:bg-amber-200 transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+            >
+              <ShieldCheck className="w-4 h-4 text-amber-900" />
+              Fazer Login
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                setActiveTab(activeTab === 'dashboard' ? 'grid' : 'dashboard')
+              }
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-xl border-2 border-b-4 border-sky-200 bg-white text-[#009FE3] hover:bg-sky-50 transition-colors whitespace-nowrap"
+            >
+              {activeTab === 'dashboard'
+                ? 'Ver Alunos na Tabela (57 Colunas)'
+                : 'Voltar ao Mural Escolar'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => syncFromTotvsApi('2027', true)}
@@ -938,7 +992,6 @@ export default function App() {
           </button>
         </div>
       </header>
-      )}
 
       {/* Notificação Toast discreta */}
       {copiedBanner && (
@@ -968,6 +1021,18 @@ export default function App() {
           isAdmin={isAdmin}
           pendingApprovalsCount={pendingApprovalsCount}
           onOpenAccessControl={() => setAccessModalOpen(true)}
+          isAuthenticated={isAuthenticated}
+          userEmail={currentUserEmail}
+          onRequestLogin={handleOpenLoginScreen}
+          onLogout={handleLogout}
+          onPreApproveCollaboratorEmail={async (email, displayName) => {
+            await handleAdminDecision({
+              targetEmail: email,
+              displayName,
+              status: 'approved',
+              role: 'viewer',
+            });
+          }}
         />
       ) : (
         /* Main Content Container (Manipulador SQL) */

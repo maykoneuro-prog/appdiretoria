@@ -51,6 +51,14 @@ import {
   TV_CAROUSEL_STORAGE_KEY,
 } from './TeamBirthdaysMural';
 import {
+  TeamScheduleAndEventsMural,
+  TeamScheduleEntry,
+  TeamMonthlyEvent,
+  TEAM_SCHEDULES_STORAGE_KEY,
+  TEAM_EVENTS_STORAGE_KEY,
+  TEAM_COLLAB_EMAILS_STORAGE_KEY,
+} from './TeamScheduleAndEventsMural';
+import {
   getPublicTvShareUrl,
   downloadStandaloneTvHtml,
 } from '../utils/tvModeShareHelper';
@@ -90,12 +98,17 @@ interface GamerEnrollmentDashboardProps {
   flashingUnits: Record<string, number>;
   onDismissFlash: (unitId: string) => void;
   externalViewRequest?: {
-    view: 'arena' | 'planilha' | 'ambos' | 'aniversariantes';
+    view: 'arena' | 'planilha' | 'ambos' | 'aniversariantes' | 'agenda_eventos';
     ts: number;
   } | null;
   isAdmin?: boolean;
   pendingApprovalsCount?: number;
   onOpenAccessControl?: () => void;
+  isAuthenticated?: boolean;
+  userEmail?: string;
+  onRequestLogin?: () => void;
+  onLogout?: () => void;
+  onPreApproveCollaboratorEmail?: (email: string, displayName: string) => Promise<void>;
 }
 
 const InlineGoalEditor: React.FC<{
@@ -182,13 +195,18 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
   isAdmin = false,
   pendingApprovalsCount = 0,
   onOpenAccessControl,
+  isAuthenticated = false,
+  userEmail = '',
+  onRequestLogin,
+  onLogout,
+  onPreApproveCollaboratorEmail,
 }) => {
   // Regra oficial: Apenas alunos com situação Matriculado ou Pré Matriculado
   // contam como matriculados (tanto Novatos quanto Veteranos/Remanescentes).
   // Matrícula Reservada e Renovação via Portal NÃO contam como matriculados.
   const [rankBy, setRankBy] = useState<'pct' | 'volume'>('pct');
   const [viewSection, setViewSection] = useState<
-    'arena' | 'planilha' | 'ambos' | 'aniversariantes'
+    'arena' | 'planilha' | 'ambos' | 'aniversariantes' | 'agenda_eventos'
   >(() => {
     try {
       const isTv =
@@ -300,6 +318,160 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ members: birthdayMembers, carouselSettings: next }),
+    }).catch(() => {});
+  };
+
+  const [teamSchedules, setTeamSchedules] = useState<TeamScheduleEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(TEAM_SCHEDULES_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  const [teamEvents, setTeamEvents] = useState<TeamMonthlyEvent[]>(() => {
+    try {
+      const saved = localStorage.getItem(TEAM_EVENTS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  const [collaboratorEmails, setCollaboratorEmails] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem(TEAM_COLLAB_EMAILS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return {};
+  });
+
+  const handleUpdateTeamSchedules = (next: TeamScheduleEntry[]) => {
+    const prevIds = new Set(teamSchedules.map((s) => s.id));
+    const nextIds = new Set(next.map((s) => s.id));
+    setTeamSchedules(next);
+    try {
+      localStorage.setItem(TEAM_SCHEDULES_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+    fetch('/api/team-schedule-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        schedules: next,
+        events: teamEvents,
+        collaboratorAccess: collaboratorEmails,
+      }),
+    }).catch(() => {});
+
+    if (auth.currentUser?.emailVerified) {
+      for (const s of next) {
+        const safeId = String(s.id || `sched-${Date.now()}`)
+          .replace(/[^a-zA-Z0-9_-]/g, '_')
+          .slice(0, 128);
+        setDoc(doc(db, 'teamSchedules', safeId), {
+          id: safeId,
+          memberId: String(s.memberId || 'collab').slice(0, 128),
+          memberName: String(s.memberName || 'Colaborador').slice(0, 120),
+          day: Math.max(1, Math.min(31, Math.round(Number(s.day) || 1))),
+          endDay: Math.max(1, Math.min(31, Math.round(Number(s.endDay || s.day) || 1))),
+          month: Math.max(1, Math.min(12, Math.round(Number(s.month) || 1))),
+          shift: String(s.shift || 'Dia Todo').slice(0, 60),
+          locationCategory: String(s.locationCategory || 'sede').slice(0, 40),
+          locationName: String(s.locationName || 'Sede Educação').slice(0, 140),
+          activity: String(s.activity || '').slice(0, 300),
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+      for (const oldId of prevIds) {
+        if (!nextIds.has(oldId)) {
+          const safeOldId = String(oldId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+          deleteDoc(doc(db, 'teamSchedules', safeOldId)).catch(() => {});
+        }
+      }
+    }
+  };
+
+  const handleUpdateTeamEvents = (next: TeamMonthlyEvent[]) => {
+    const prevIds = new Set(teamEvents.map((e) => e.id));
+    const nextIds = new Set(next.map((e) => e.id));
+    setTeamEvents(next);
+    try {
+      localStorage.setItem(TEAM_EVENTS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+    fetch('/api/team-schedule-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        schedules: teamSchedules,
+        events: next,
+        collaboratorAccess: collaboratorEmails,
+      }),
+    }).catch(() => {});
+
+    if (auth.currentUser?.emailVerified) {
+      for (const ev of next) {
+        const safeId = String(ev.id || `evt-${Date.now()}`)
+          .replace(/[^a-zA-Z0-9_-]/g, '_')
+          .slice(0, 128);
+        setDoc(doc(db, 'teamEvents', safeId), {
+          id: safeId,
+          title: String(ev.title || 'Evento SESI').slice(0, 140),
+          day: Math.max(1, Math.min(31, Math.round(Number(ev.day) || 1))),
+          endDay: Math.max(1, Math.min(31, Math.round(Number(ev.endDay || ev.day) || 1))),
+          month: Math.max(1, Math.min(12, Math.round(Number(ev.month) || 1))),
+          timeRange: String(ev.timeRange || '').slice(0, 80),
+          location: String(ev.location || 'Rede SESI-PE').slice(0, 140),
+          status:
+            ev.status === 'today' || ev.status === 'past' ? ev.status : 'upcoming',
+          description: String(ev.description || '').slice(0, 400),
+          coverPhotoDataUrl: String(ev.coverPhotoDataUrl || '').slice(0, 350000),
+          extraPhotoDataUrl1: String(ev.extraPhotoDataUrl1 || '').slice(0, 350000),
+          extraPhotoDataUrl2: String(ev.extraPhotoDataUrl2 || '').slice(0, 350000),
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+      for (const oldId of prevIds) {
+        if (!nextIds.has(oldId)) {
+          const safeOldId = String(oldId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+          deleteDoc(doc(db, 'teamEvents', safeOldId)).catch(() => {});
+        }
+      }
+    }
+  };
+
+  const handleUpdateCollaboratorEmails = (next: Record<string, string>) => {
+    setCollaboratorEmails(next);
+    try {
+      localStorage.setItem(TEAM_COLLAB_EMAILS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+    fetch('/api/team-schedule-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        schedules: teamSchedules,
+        events: teamEvents,
+        collaboratorAccess: next,
+      }),
     }).catch(() => {});
   };
   const [copiedLink, setCopiedLink] = useState(false);
@@ -452,17 +624,136 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
       () => {}
     );
 
+    const qSchedules = query(collection(db, 'teamSchedules'), where('month', '>=', 1));
+    const unsubSchedules = onSnapshot(
+      qSchedules,
+      (snap) => {
+        if (!snap.empty) {
+          const fsItems: TeamScheduleEntry[] = [];
+          snap.forEach((docSnap) => {
+            const d = docSnap.data();
+            fsItems.push({
+              id: String(d.id || docSnap.id),
+              memberId: String(d.memberId || ''),
+              memberName: String(d.memberName || 'Colaborador'),
+              day: Number(d.day) || 1,
+              endDay: Number(d.endDay || d.day) || 1,
+              month: Number(d.month) || 1,
+              shift: String(d.shift || 'Dia Todo'),
+              locationCategory: (d.locationCategory as any) || 'sede',
+              locationName: String(d.locationName || 'Sede Educação'),
+              activity: String(d.activity || ''),
+            });
+          });
+          setTeamSchedules((prev) => {
+            const byId = new Map<string, TeamScheduleEntry>();
+            for (const item of prev) byId.set(item.id, item);
+            for (const item of fsItems) byId.set(item.id, item);
+            const merged = Array.from(byId.values());
+            try {
+              localStorage.setItem(TEAM_SCHEDULES_STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+              // ignore
+            }
+            return merged;
+          });
+        }
+      },
+      () => {}
+    );
+
+    const qEvents = query(collection(db, 'teamEvents'), where('month', '>=', 1));
+    const unsubEvents = onSnapshot(
+      qEvents,
+      (snap) => {
+        if (!snap.empty) {
+          const fsItems: TeamMonthlyEvent[] = [];
+          snap.forEach((docSnap) => {
+            const d = docSnap.data();
+            fsItems.push({
+              id: String(d.id || docSnap.id),
+              title: String(d.title || 'Evento SESI'),
+              day: Number(d.day) || 1,
+              endDay: Number(d.endDay || d.day) || 1,
+              month: Number(d.month) || 1,
+              timeRange: String(d.timeRange || ''),
+              location: String(d.location || 'Rede SESI-PE'),
+              status:
+                d.status === 'today' || d.status === 'past' ? d.status : 'upcoming',
+              description: String(d.description || ''),
+              coverPhotoDataUrl: d.coverPhotoDataUrl ? String(d.coverPhotoDataUrl) : undefined,
+              extraPhotoDataUrl1: d.extraPhotoDataUrl1 ? String(d.extraPhotoDataUrl1) : undefined,
+              extraPhotoDataUrl2: d.extraPhotoDataUrl2 ? String(d.extraPhotoDataUrl2) : undefined,
+            });
+          });
+          setTeamEvents((prev) => {
+            const byId = new Map<string, TeamMonthlyEvent>();
+            for (const item of prev) byId.set(item.id, item);
+            for (const item of fsItems) byId.set(item.id, item);
+            const merged = Array.from(byId.values());
+            try {
+              localStorage.setItem(TEAM_EVENTS_STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+              // ignore
+            }
+            return merged;
+          });
+        }
+      },
+      () => {}
+    );
+
+    fetch('/data/team_schedule_events_2027.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data === 'object') {
+          if (Array.isArray(data.schedules) && data.schedules.length > 0) {
+            setTeamSchedules((prev) => (prev.length > 0 ? prev : data.schedules));
+          }
+          if (Array.isArray(data.events) && data.events.length > 0) {
+            setTeamEvents((prev) => (prev.length > 0 ? prev : data.events));
+          }
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/team-schedule-events')
+      .then((r) => {
+        const ct = r.headers.get('content-type') || '';
+        return r.ok && ct.includes('application/json') ? r.json() : null;
+      })
+      .then((data) => {
+        if (data?.ok) {
+          if (Array.isArray(data.schedules) && data.schedules.length > 0) {
+            setTeamSchedules(data.schedules);
+          }
+          if (Array.isArray(data.events) && data.events.length > 0) {
+            setTeamEvents(data.events);
+          }
+          if (data.collaboratorAccess && typeof data.collaboratorAccess === 'object') {
+            setCollaboratorEmails((prev) => ({ ...prev, ...data.collaboratorAccess }));
+          }
+        }
+      })
+      .catch(() => {});
+
     return () => {
       unsubBirthdays();
+      unsubSchedules();
+      unsubEvents();
     };
   }, []);
 
-  // Carrossel Automático no Modo TV: alterna entre Painel de Matrículas ('arena') e Mural de Aniversariantes ('aniversariantes')
+  // Carrossel Automático no Modo TV: alterna entre Painel de Matrículas ('arena'), Mural de Aniversariantes ('aniversariantes') e Agenda da Equipe & Eventos ('agenda_eventos')
   useEffect(() => {
     if (!isTvMode || !tvCarouselSettings.enabled) return;
     const ms = Math.max(10, tvCarouselSettings.intervalSeconds || 25) * 1000;
     const timer = setInterval(() => {
-      setViewSection((prev) => (prev === 'aniversariantes' ? 'arena' : 'aniversariantes'));
+      setViewSection((prev) => {
+        if (prev === 'arena') return 'aniversariantes';
+        if (prev === 'aniversariantes') return 'agenda_eventos';
+        return 'arena';
+      });
     }, ms);
     return () => clearInterval(timer);
   }, [isTvMode, tvCarouselSettings.enabled, tvCarouselSettings.intervalSeconds]);
@@ -657,6 +948,15 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
         document.documentElement.requestFullscreen?.().catch(() => {});
       }
     } else {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('tv')) {
+          url.searchParams.delete('tv');
+          window.history.replaceState({}, '', url.toString());
+        }
+      } catch {
+        // ignore
+      }
       if (document.fullscreenElement) {
         document.exitFullscreen?.().catch(() => {});
       }
@@ -774,6 +1074,19 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
                 <Cake className="w-3.5 h-3.5 text-amber-700" />
                 <span>Aniversariantes ({birthdayMembers.length})</span>
               </button>
+              <button
+                type="button"
+                onClick={() => setViewSection('agenda_eventos')}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-extrabold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                  viewSection === 'agenda_eventos'
+                    ? 'bg-emerald-400 text-emerald-950 shadow-xs'
+                    : 'text-emerald-900 bg-emerald-50 hover:bg-emerald-100'
+                }`}
+                title="Abrir Agenda Mensal dos Colaboradores da Equipe e Eventos do Mês (com Galeria de Fotos no Carrossel)"
+              >
+                <Calendar className="w-3.5 h-3.5 text-emerald-700" />
+                <span>Agenda Equipe & Eventos</span>
+              </button>
             </div>
 
             {isTvMode && (
@@ -838,7 +1151,27 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
               WhatsApp Unidades
             </button>
 
-            {isAdmin && onOpenAccessControl && !isTvMode && (
+            {!isAuthenticated && onRequestLogin && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isTvMode) {
+                    setIsTvMode(false);
+                    if (document.fullscreenElement) {
+                      document.exitFullscreen?.().catch(() => {});
+                    }
+                  }
+                  onRequestLogin();
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-extrabold rounded-xl border-2 border-b-4 bg-amber-300 text-amber-950 border-amber-500 hover:bg-amber-200 transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+                title="Entrar com Conta Google ou Administrador (maykon.euro@gmail.com)"
+              >
+                <ShieldCheck className="w-4 h-4 text-amber-900" />
+                <span>Fazer Login</span>
+              </button>
+            )}
+
+            {isAdmin && onOpenAccessControl && (
               <button
                 type="button"
                 onClick={onOpenAccessControl}
@@ -847,12 +1180,23 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
                     ? 'bg-amber-300 text-amber-950 border-amber-500 animate-pulse'
                     : 'bg-slate-800 text-white border-slate-950 hover:bg-slate-700'
                 }`}
-                title="Gerenciar e aprovar solicitações de login Google (Administrador: maykon.euro@hotmail.com)"
+                title="Gerenciar e aprovar solicitações de login Google (Administrador: maykon.euro@gmail.com)"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-amber-300" />
                 <span>
                   Aprovar Acessos{pendingApprovalsCount > 0 ? ` (${pendingApprovalsCount})` : ''}
                 </span>
+              </button>
+            )}
+
+            {isAuthenticated && onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors whitespace-nowrap cursor-pointer"
+                title={`Conectado como ${userEmail}. Clique para sair.`}
+              >
+                <span>Sair</span>
               </button>
             )}
 
@@ -908,8 +1252,28 @@ export const GamerEnrollmentDashboard: React.FC<GamerEnrollmentDashboardProps> =
           />
         )}
 
+        {/* SEÇÃO NOVA: AGENDA MENSAL DOS COLABORADORES DA EQUIPE & EVENTOS DO MÊS (NO CARROSSEL) */}
+        {viewSection === 'agenda_eventos' && (
+          <TeamScheduleAndEventsMural
+            members={birthdayMembers}
+            schedules={teamSchedules}
+            onChangeSchedules={handleUpdateTeamSchedules}
+            events={teamEvents}
+            onChangeEvents={handleUpdateTeamEvents}
+            collaboratorEmails={collaboratorEmails}
+            onChangeCollaboratorEmails={handleUpdateCollaboratorEmails}
+            onPreApproveCollaboratorEmail={onPreApproveCollaboratorEmail}
+            carouselSettings={tvCarouselSettings}
+            onChangeCarouselSettings={handleUpdateTvCarouselSettings}
+            isTvMode={isTvMode}
+            isAdmin={isAdmin}
+            onSwitchToEnrollments={() => setViewSection(isTvMode ? 'arena' : 'ambos')}
+            onSwitchToBirthdays={() => setViewSection('aniversariantes')}
+          />
+        )}
+
         {/* 1. CABEÇALHO DO MURAL ESCOLAR — CAMPANHA DE MATRÍCULAS SESI-PE 2027 */}
-        {viewSection !== 'aniversariantes' && (
+        {viewSection !== 'aniversariantes' && viewSection !== 'agenda_eventos' && (
         <section className={isTvMode ? 'space-y-2' : 'space-y-3.5'}>
           <div
             className={`rounded-2xl bg-white border-2 border-b-4 border-sky-300 ${

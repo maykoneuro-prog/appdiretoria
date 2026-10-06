@@ -39,9 +39,9 @@ import {
   OperationType,
 } from '../firebase';
 
-export const PRIMARY_ADMIN_EMAIL = 'maykon.euro@hotmail.com';
+export const PRIMARY_ADMIN_EMAIL = 'maykon.euro@gmail.com';
 const BOOTSTRAPPED_ADMIN_EMAILS = [
-  'maykon.euro@hotmail.com',
+  'maykon.euro@gmail.com',
   'paroquiabomsamaritano.iecb@gmail.com',
 ];
 
@@ -65,13 +65,38 @@ function sanitizeUid(rawUid: string): string {
   return rawUid.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128) || 'user_default';
 }
 
+const LOCAL_AUTH_SESSION_KEY = 'sesi_pe_auth_session_record_v1';
+
 export function useAccessControlAuth(skipAuthForTvMode: boolean) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState<boolean>(false);
-  const [accessRecord, setAccessRecord] = useState<AccessControlRecord | null>(null);
+  const [authReady, setAuthReady] = useState<boolean>(skipAuthForTvMode);
+  const [accessRecord, setAccessRecord] = useState<AccessControlRecord | null>(() => {
+    try {
+      const saved = localStorage.getItem(LOCAL_AUTH_SESSION_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.email) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
   const [allRecords, setAllRecords] = useState<AccessControlRecord[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState<boolean>(false);
+
+  const persistLocalSession = (rec: AccessControlRecord | null) => {
+    try {
+      if (rec) {
+        localStorage.setItem(LOCAL_AUTH_SESSION_KEY, JSON.stringify(rec));
+      } else {
+        localStorage.removeItem(LOCAL_AUTH_SESSION_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const syncUserAccessState = useCallback(async (user: User) => {
     const cleanUid = sanitizeUid(user.uid);
@@ -150,33 +175,28 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
       }
     }
 
-    if (serverRecord) {
-      setAccessRecord(serverRecord);
-    } else {
-      setAccessRecord({
-        uid: cleanUid,
-        email: cleanEmail,
-        displayName: cleanName,
-        photoURL: cleanPhoto,
-        status: isMaster ? 'approved' : 'pending',
-        role: isMaster ? 'admin' : 'viewer',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    const finalRec: AccessControlRecord = serverRecord || {
+      uid: cleanUid,
+      email: cleanEmail,
+      displayName: cleanName,
+      photoURL: cleanPhoto,
+      status: isMaster ? 'approved' : 'pending',
+      role: isMaster ? 'admin' : 'viewer',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setAccessRecord(finalRec);
+    persistLocalSession(finalRec);
   }, []);
 
   useEffect(() => {
     if (skipAuthForTvMode) {
       setAuthReady(true);
-      return;
     }
     const unsub = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (user) {
         await syncUserAccessState(user);
-      } else {
-        setAccessRecord(null);
       }
       setAuthReady(true);
     });
@@ -185,7 +205,7 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
 
   // Escuta mudanças em tempo real no documento do próprio usuário no Firestore
   useEffect(() => {
-    if (skipAuthForTvMode || !firebaseUser || !firebaseUser.emailVerified) return;
+    if (!firebaseUser || !firebaseUser.emailVerified) return;
     const cleanUid = sanitizeUid(firebaseUser.uid);
     const docRef = doc(db, 'accessRequests', cleanUid);
     const unsub = onSnapshot(
@@ -194,16 +214,20 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
         if (snap.exists()) {
           const d = snap.data();
           const isMaster = isMasterAdminEmail(firebaseUser.email);
-          setAccessRecord((prev) => ({
-            uid: cleanUid,
-            email: String(d.email || firebaseUser.email || ''),
-            displayName: String(d.displayName || firebaseUser.displayName || 'Usuário'),
-            photoURL: String(d.photoURL || firebaseUser.photoURL || ''),
-            status: isMaster ? 'approved' : d.status || prev?.status || 'pending',
-            role: isMaster ? 'admin' : d.role || prev?.role || 'viewer',
-            createdAt: prev?.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }));
+          setAccessRecord((prev) => {
+            const nextRec: AccessControlRecord = {
+              uid: cleanUid,
+              email: String(d.email || firebaseUser.email || ''),
+              displayName: String(d.displayName || firebaseUser.displayName || 'Usuário'),
+              photoURL: String(d.photoURL || firebaseUser.photoURL || ''),
+              status: isMaster ? 'approved' : d.status || prev?.status || 'pending',
+              role: isMaster ? 'admin' : d.role || prev?.role || 'viewer',
+              createdAt: prev?.createdAt || new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            persistLocalSession(nextRec);
+            return nextRec;
+          });
         }
       },
       () => {
@@ -211,16 +235,37 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
       }
     );
     return () => unsub();
-  }, [skipAuthForTvMode, firebaseUser]);
+  }, [firebaseUser]);
 
   // Se o usuário estiver aguardando aprovação ('pending'), verifica a cada 5s se o admin aprovou
   useEffect(() => {
-    if (skipAuthForTvMode || !firebaseUser || accessRecord?.status !== 'pending') return;
+    if (!accessRecord || accessRecord.status !== 'pending') return;
     const timer = setInterval(() => {
-      syncUserAccessState(firebaseUser);
+      if (firebaseUser) {
+        syncUserAccessState(firebaseUser);
+      } else if (accessRecord.email) {
+        fetch('/api/access-control/check-or-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: accessRecord.uid,
+            email: accessRecord.email,
+            displayName: accessRecord.displayName,
+            photoURL: accessRecord.photoURL,
+          }),
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data?.ok && data.userRecord) {
+              setAccessRecord(data.userRecord);
+              persistLocalSession(data.userRecord);
+            }
+          })
+          .catch(() => {});
+      }
     }, 5000);
     return () => clearInterval(timer);
-  }, [skipAuthForTvMode, firebaseUser, accessRecord?.status, syncUserAccessState]);
+  }, [firebaseUser, accessRecord, syncUserAccessState]);
 
   const refreshAdminList = useCallback(async () => {
     try {
@@ -241,7 +286,7 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
   );
 
   useEffect(() => {
-    if (skipAuthForTvMode || !isAdmin) return;
+    if (!isAdmin) return;
     refreshAdminList();
     const timer = setInterval(refreshAdminList, 8000);
 
@@ -284,7 +329,7 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
       clearInterval(timer);
       if (unsubFirestore) unsubFirestore();
     };
-  }, [skipAuthForTvMode, isAdmin, firebaseUser, refreshAdminList]);
+  }, [isAdmin, firebaseUser, refreshAdminList]);
 
   const handleGoogleLogin = async () => {
     setAuthError(null);
@@ -294,11 +339,71 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
       await syncUserAccessState(cred.user);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Falha ao autenticar com o Google.';
-      if (!msg.includes('auth/popup-closed-by-user')) {
+      if (msg.includes('auth/unauthorized-domain')) {
         setAuthError(
-          'Não foi possível concluir o login com o Google. Verifique se o pop-up não foi bloqueado pelo navegador.'
+          `Este domínio (${window.location.hostname}) ainda não foi adicionado em Authorized Domains no Firebase Console, ou utilize a opção abaixo "Entrar com E-mail Cadastrado / Admin".`
+        );
+      } else if (!msg.includes('auth/popup-closed-by-user')) {
+        setAuthError(
+          'Não foi possível concluir o login com o Google. Verifique se o pop-up não foi bloqueado ou utilize o acesso por e-mail abaixo.'
         );
       }
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleEmailDirectLogin = async (emailInput: string, nameInput?: string) => {
+    const cleanEmail = emailInput.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setAuthError('Informe um endereço de e-mail válido.');
+      return;
+    }
+    setAuthError(null);
+    setSigningIn(true);
+    try {
+      const isMaster = isMasterAdminEmail(cleanEmail);
+      const cleanName = (nameInput?.trim() || cleanEmail.split('@')[0] || 'Usuário').slice(0, 120);
+      const cleanUid = sanitizeUid(`email_${cleanEmail}`);
+
+      let serverRecord: AccessControlRecord | null = null;
+      try {
+        const res = await fetch('/api/access-control/check-or-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: cleanUid,
+            email: cleanEmail,
+            displayName: cleanName,
+            photoURL: '',
+          }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data?.ok && data.userRecord) {
+            serverRecord = data.userRecord;
+            if (Array.isArray(data.allRecords)) {
+              setAllRecords(data.allRecords);
+            }
+          }
+        }
+      } catch {
+        // fallback para validação local/master
+      }
+
+      const finalRec: AccessControlRecord = serverRecord || {
+        uid: cleanUid,
+        email: cleanEmail,
+        displayName: cleanName,
+        photoURL: '',
+        status: isMaster ? 'approved' : 'pending',
+        role: isMaster ? 'admin' : 'viewer',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setAccessRecord(finalRec);
+      persistLocalSession(finalRec);
     } finally {
       setSigningIn(false);
     }
@@ -307,10 +412,11 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      setAccessRecord(null);
     } catch {
       // ignore
     }
+    setAccessRecord(null);
+    persistLocalSession(null);
   };
 
   const handleAdminDecision = async (params: {
@@ -371,6 +477,7 @@ export function useAccessControlAuth(skipAuthForTvMode: boolean) {
     authError,
     signingIn,
     handleGoogleLogin,
+    handleEmailDirectLogin,
     handleLogout,
     handleAdminDecision,
     refreshAdminList,
@@ -384,6 +491,7 @@ export const AuthLoginAndPendingScreen: React.FC<{
   signingIn: boolean;
   authError: string | null;
   onGoogleLogin: () => void;
+  onEmailDirectLogin?: (email: string) => void;
   onLogout: () => void;
   onRefreshStatus: () => void;
   onEnterPublicTvMode: () => void;
@@ -393,10 +501,18 @@ export const AuthLoginAndPendingScreen: React.FC<{
   signingIn,
   authError,
   onGoogleLogin,
+  onEmailDirectLogin,
   onLogout,
   onRefreshStatus,
   onEnterPublicTvMode,
 }) => {
+  const [manualEmail, setManualEmail] = useState('');
+  const hasIdentifiedUser = Boolean(firebaseUser || accessRecord);
+  const displayEmail = firebaseUser?.email || accessRecord?.email || '';
+  const displayName =
+    firebaseUser?.displayName || accessRecord?.displayName || 'Usuário Autenticado';
+  const displayPhoto = firebaseUser?.photoURL || accessRecord?.photoURL || '';
+
   return (
     <div className="min-h-screen bg-[#F0F7FF] bg-[radial-gradient(#bae6fd_1.25px,transparent_1.25px)] bg-[size:24px_24px] flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md rounded-3xl bg-white border-2 border-b-8 border-[#009FE3] shadow-2xl overflow-hidden">
@@ -418,7 +534,7 @@ export const AuthLoginAndPendingScreen: React.FC<{
 
         {/* Corpo: Tela de Login Google OU Tela de Aguardando Aprovação */}
         <div className="p-6 space-y-5">
-          {!firebaseUser ? (
+          {!hasIdentifiedUser ? (
             <>
               <div className="rounded-2xl bg-sky-50 border border-sky-200 p-3.5 text-xs text-slate-700 space-y-1.5">
                 <div className="font-extrabold text-sky-900 flex items-center gap-1.5">
@@ -466,6 +582,36 @@ export const AuthLoginAndPendingScreen: React.FC<{
                 <span>{signingIn ? 'Conectando ao Google...' : 'Entrar com Conta Google'}</span>
               </button>
 
+              {onEmailDirectLogin && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (manualEmail.trim()) onEmailDirectLogin(manualEmail.trim());
+                  }}
+                  className="pt-3 border-t border-slate-100 space-y-2"
+                >
+                  <label className="block text-[11px] font-bold text-slate-600">
+                    Ou informe seu e-mail Google (Admin: <span className="font-mono">{PRIMARY_ADMIN_EMAIL}</span>):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="email"
+                      value={manualEmail}
+                      onChange={(e) => setManualEmail(e.target.value)}
+                      placeholder="Ex.: maykon.euro@gmail.com"
+                      className="flex-1 px-3 py-2 text-xs font-mono font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:border-[#009FE3]"
+                    />
+                    <button
+                      type="submit"
+                      disabled={signingIn || !manualEmail.trim()}
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    >
+                      Entrar
+                    </button>
+                  </div>
+                </form>
+              )}
+
               <div className="pt-3 border-t border-slate-100 text-center space-y-2">
                 <p className="text-[11px] text-slate-500">
                   Vai abrir apenas o Mural em uma Smart TV (sem dados sensíveis)?
@@ -484,24 +630,24 @@ export const AuthLoginAndPendingScreen: React.FC<{
             /* Usuário autenticado, porém aguardando aprovação ou recusado */
             <div className="space-y-4 text-center">
               <div className="flex flex-col items-center gap-2">
-                {firebaseUser.photoURL ? (
+                {displayPhoto ? (
                   <img
-                    src={firebaseUser.photoURL}
-                    alt={firebaseUser.displayName || 'Avatar'}
+                    src={displayPhoto}
+                    alt={displayName}
                     referrerPolicy="no-referrer"
                     className="w-16 h-16 rounded-2xl border-2 border-[#009FE3] object-cover shadow-xs"
                   />
                 ) : (
                   <div className="w-16 h-16 rounded-2xl bg-sky-100 text-[#009FE3] font-extrabold text-xl flex items-center justify-center">
-                    {(firebaseUser.displayName || firebaseUser.email || 'U')[0].toUpperCase()}
+                    {(displayName || displayEmail || 'U')[0].toUpperCase()}
                   </div>
                 )}
                 <div>
                   <div className="text-base font-extrabold text-slate-900">
-                    {firebaseUser.displayName || 'Usuário Autenticado'}
+                    {displayName}
                   </div>
                   <div className="text-xs font-mono font-bold text-slate-500">
-                    {firebaseUser.email}
+                    {displayEmail}
                   </div>
                 </div>
               </div>
@@ -513,7 +659,7 @@ export const AuthLoginAndPendingScreen: React.FC<{
                     Acesso Não Autorizado
                   </div>
                   <p className="text-xs text-rose-700 leading-relaxed">
-                    Sua solicitação de acesso para <strong>{firebaseUser.email}</strong> não foi
+                    Sua solicitação de acesso para <strong>{displayEmail}</strong> não foi
                     aprovada pelo administrador (<strong>{PRIMARY_ADMIN_EMAIL}</strong>).
                   </p>
                 </div>
@@ -547,6 +693,17 @@ export const AuthLoginAndPendingScreen: React.FC<{
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   Trocar Conta
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={onEnterPublicTvMode}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 text-xs font-extrabold transition-colors cursor-pointer"
+                >
+                  <Tv className="w-4 h-4 text-amber-700" />
+                  Abrir Modo TV Público Enquanto Aguarda
                 </button>
               </div>
             </div>

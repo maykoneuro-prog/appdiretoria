@@ -157,6 +157,179 @@
         "avatarGradient",
         "updatedAt"
       ]
+    },
+    "TeamScheduleDoc": {
+      "title": "TeamScheduleDoc",
+      "description": "Stores a monthly schedule entry or current whereabouts for a collaborator.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the schedule entry.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "memberId": {
+          "type": "string",
+          "description": "Collaborator ID from the team list.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "memberName": {
+          "type": "string",
+          "description": "Collaborator full name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "day": {
+          "type": "integer",
+          "description": "Day of month (1..31)."
+        },
+        "endDay": {
+          "type": "integer",
+          "description": "Optional end day of month (1..31)."
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month of year (1..12)."
+        },
+        "shift": {
+          "type": "string",
+          "description": "Shift or time range (e.g. Manhã, Tarde, Dia Todo).",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "locationCategory": {
+          "type": "string",
+          "description": "Category of location (sede, escola, evento, home_office, viagem, ferias).",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "locationName": {
+          "type": "string",
+          "description": "Specific school unit, sector or external venue.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "activity": {
+          "type": "string",
+          "description": "Description of the activity or mission.",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when updated."
+        }
+      },
+      "required": [
+        "id",
+        "memberId",
+        "memberName",
+        "day",
+        "endDay",
+        "month",
+        "shift",
+        "locationCategory",
+        "locationName",
+        "activity",
+        "updatedAt"
+      ]
+    },
+    "TeamEventDoc": {
+      "title": "TeamEventDoc",
+      "description": "Stores a monthly team or school event, including photos of past events for the TV carousel.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the event.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the event.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "day": {
+          "type": "integer",
+          "description": "Start day of month (1..31)."
+        },
+        "endDay": {
+          "type": "integer",
+          "description": "End day of month (1..31)."
+        },
+        "month": {
+          "type": "integer",
+          "description": "Month of year (1..12)."
+        },
+        "timeRange": {
+          "type": "string",
+          "description": "Event time or schedule.",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "location": {
+          "type": "string",
+          "description": "Unit or venue of the event.",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "status": {
+          "type": "string",
+          "description": "Event status: upcoming, today, or past.",
+          "enum": ["upcoming", "today", "past"]
+        },
+        "description": {
+          "type": "string",
+          "description": "Summary or highlights of the event.",
+          "minLength": 0,
+          "maxLength": 400
+        },
+        "coverPhotoDataUrl": {
+          "type": "string",
+          "description": "Primary event photo data URL.",
+          "minLength": 0,
+          "maxLength": 350000
+        },
+        "extraPhotoDataUrl1": {
+          "type": "string",
+          "description": "Additional past event photo 1.",
+          "minLength": 0,
+          "maxLength": 350000
+        },
+        "extraPhotoDataUrl2": {
+          "type": "string",
+          "description": "Additional past event photo 2.",
+          "minLength": 0,
+          "maxLength": 350000
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when updated."
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "day",
+        "endDay",
+        "month",
+        "timeRange",
+        "location",
+        "status",
+        "description",
+        "coverPhotoDataUrl",
+        "extraPhotoDataUrl1",
+        "extraPhotoDataUrl2",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -177,6 +350,18 @@
         "$ref": "#/entities/TeamBirthdayDoc"
       },
       "description": "Stores team birthday mural entries synced across Vercel and TV mode."
+    },
+    "/teamSchedules/{scheduleId}": {
+      "schema": {
+        "$ref": "#/entities/TeamScheduleDoc"
+      },
+      "description": "Stores collaborator monthly schedules and current whereabouts for the TV carousel."
+    },
+    "/teamEvents/{eventId}": {
+      "schema": {
+        "$ref": "#/entities/TeamEventDoc"
+      },
+      "description": "Stores monthly events and past event photo galleries for the TV carousel."
     }
   }
 }

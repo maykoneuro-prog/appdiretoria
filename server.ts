@@ -76,7 +76,16 @@ async function ensurePublicTvTunnel(port: number): Promise<string | null> {
   return tunnelPromise;
 }
 
-const PORT = 3000;
+function getPort(): number {
+  const portArgIndex = process.argv.indexOf('--port');
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const p = parseInt(process.argv[portArgIndex + 1], 10);
+    if (!isNaN(p)) return p;
+  }
+  return 3000;
+}
+
+const PORT = getPort();
 const DEFAULT_TOTVS_URL = (
   process.env.TOTVS_BASE_URL ||
   'https://sge.pe.sesi.org.br/FrameHTML/rm/api/TOTVSCustomizacao/ConsultasSQL/ExecutaConsultaSQL'
@@ -502,6 +511,7 @@ function getCachedPeriodo(periodo: string): StreamQueryResult | null {
 
 async function startServer() {
   const app = express();
+  const httpServer = http.createServer(app);
   app.use(express.json({ limit: '50mb' }));
 
   // Status da configuração e do cache
@@ -617,7 +627,7 @@ async function startServer() {
   const TEAM_BIRTHDAYS_CACHE_FILE = path.join(CACHE_DIR, 'team_birthdays_2027.json');
   const ACCESS_CONTROL_CACHE_FILE = path.join(CACHE_DIR, 'access_control_2027.json');
 
-  const MASTER_ADMIN_EMAILS = ['maykon.euro@hotmail.com', 'paroquiabomsamaritano.iecb@gmail.com'];
+  const MASTER_ADMIN_EMAILS = ['maykon.euro@gmail.com', 'paroquiabomsamaritano.iecb@gmail.com'];
 
   function readAccessControlRecords(): Array<{
     uid: string;
@@ -767,6 +777,76 @@ async function startServer() {
   // Endpoints para o Mural de Aniversariantes da Equipe (independente do SQL, salvo em disco e em public/data para Vercel)
   const PUBLIC_DATA_DIR = path.join(process.cwd(), 'public', 'data');
   const PUBLIC_BIRTHDAYS_FILE = path.join(PUBLIC_DATA_DIR, 'team_birthdays_2027.json');
+  const TEAM_SCHEDULE_EVENTS_CACHE_FILE = path.join(CACHE_DIR, 'team_schedule_events_2027.json');
+  const PUBLIC_SCHEDULE_EVENTS_FILE = path.join(PUBLIC_DATA_DIR, 'team_schedule_events_2027.json');
+
+  app.get('/api/team-schedule-events', (_req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+      const sourceFile = fs.existsSync(TEAM_SCHEDULE_EVENTS_CACHE_FILE)
+        ? TEAM_SCHEDULE_EVENTS_CACHE_FILE
+        : fs.existsSync(PUBLIC_SCHEDULE_EVENTS_FILE)
+        ? PUBLIC_SCHEDULE_EVENTS_FILE
+        : null;
+      if (sourceFile) {
+        const raw = fs.readFileSync(sourceFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return res.json({
+            ok: true,
+            schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
+            events: Array.isArray(parsed.events) ? parsed.events : [],
+            collaboratorAccess:
+              parsed.collaboratorAccess && typeof parsed.collaboratorAccess === 'object'
+                ? parsed.collaboratorAccess
+                : {},
+          });
+        }
+      }
+      return res.json({ ok: true, schedules: [], events: [], collaboratorAccess: {} });
+    } catch {
+      return res.json({ ok: false, schedules: [], events: [], collaboratorAccess: {} });
+    }
+  });
+
+  app.post('/api/team-schedule-events', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+      const { schedules, events, collaboratorAccess } = req.body || {};
+      if (!fs.existsSync(CACHE_DIR)) {
+        fs.mkdirSync(CACHE_DIR, { recursive: true });
+      }
+      if (!fs.existsSync(PUBLIC_DATA_DIR)) {
+        fs.mkdirSync(PUBLIC_DATA_DIR, { recursive: true });
+      }
+      let existing: Record<string, unknown> = {};
+      if (fs.existsSync(TEAM_SCHEDULE_EVENTS_CACHE_FILE)) {
+        try {
+          existing = JSON.parse(fs.readFileSync(TEAM_SCHEDULE_EVENTS_CACHE_FILE, 'utf8')) || {};
+        } catch {
+          existing = {};
+        }
+      }
+      const nextPayload = {
+        ...existing,
+        ...(Array.isArray(schedules) ? { schedules } : {}),
+        ...(Array.isArray(events) ? { events } : {}),
+        ...(collaboratorAccess && typeof collaboratorAccess === 'object'
+          ? { collaboratorAccess }
+          : {}),
+        updatedAt: new Date().toISOString(),
+      };
+      const serialized = JSON.stringify(nextPayload, null, 2);
+      fs.writeFileSync(TEAM_SCHEDULE_EVENTS_CACHE_FILE, serialized, 'utf8');
+      fs.writeFileSync(PUBLIC_SCHEDULE_EVENTS_FILE, serialized, 'utf8');
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Erro ao salvar agenda e eventos da equipe',
+      });
+    }
+  });
 
   app.get('/api/team-birthdays', (_req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1241,7 +1321,12 @@ async function startServer() {
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true, allowedHosts: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
+        watch: process.env.DISABLE_HMR === 'true' ? null : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1253,11 +1338,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use.`);
+    } else {
+      console.error('Server error:', err);
+    }
+  });
+
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    setTimeout(() => {
-      ensurePublicTvTunnel(PORT).catch(() => {});
-    }, 2000);
     // Pré-carrega automaticamente o Período 2027 da API TOTVS se houver credenciais no ambiente
     if (process.env.TOTVS_USER && process.env.TOTVS_PASSWORD && !getCachedPeriodo('2027')) {
       console.log('Iniciando sincronização automática do Período 2027 no TOTVS RM...');
